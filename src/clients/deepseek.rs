@@ -64,6 +64,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin};
 use futures::StreamExt;
 use serde_json;
+use tracing::debug;
 
 pub(crate) const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/chat/completions";
 const DEFAULT_MODEL: &str = "deepseek-reasoner";
@@ -88,14 +89,15 @@ pub struct DeepSeekClient {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+
 pub struct DeepSeekResponse {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub model: String,
     pub choices: Vec<Choice>,
-    pub usage: Usage,
-    pub system_fingerprint: String,
+    // pub usage: Usage,
+    // pub system_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -137,7 +139,6 @@ pub struct StreamResponse {
     pub model: String,
     pub choices: Vec<StreamChoice>,
     pub usage: Option<Usage>,
-    pub system_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -145,10 +146,7 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
-    pub prompt_tokens_details: PromptTokensDetails,
-    pub completion_tokens_details: CompletionTokensDetails,
-    pub prompt_cache_hit_tokens: u32,
-    pub prompt_cache_miss_tokens: u32,
+
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -361,12 +359,13 @@ impl DeepSeekClient {
         &self,
         messages: Vec<Message>,
         config: &ApiConfig,
-    ) -> Pin<Box<dyn Stream<Item=Result<StreamResponse>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item=Result<StreamResponse>> + Send + '_>> {
         let headers = match self.build_headers(Some(&config.headers)) {
             Ok(h) => h,
             Err(e) => return Box::pin(futures::stream::once(async move { Err(e) })),
         };
 
+        debug!("开始请求");
         let request = self.build_request(messages, true, config);
         let client = self.client.clone();
 
@@ -404,9 +403,16 @@ impl DeepSeekClient {
                     
                     if line.starts_with("data: ") {
                         let json_data = &line["data: ".len()..];
-                        if let Ok(response) = serde_json::from_str::<StreamResponse>(json_data) {
-                            yield response;
+                        debug!("response: {:?}",json_data);
+                        match serde_json::from_str::<StreamResponse>(json_data){
+                        Ok(response) => {
+                                yield response;
+                            },
+                            Err(e) => {
+                                debug!("{}",e);
+                            }
                         }
+
                     }
                 }
 

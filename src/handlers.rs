@@ -22,7 +22,7 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use std::{sync::Arc, collections::HashMap};
-use axum::http::{HeaderValue, Uri};
+use axum::http::{Uri};
 use tokio_stream::wrappers::ReceiverStream;
 use crate::clients::deepseek;
 
@@ -78,18 +78,19 @@ fn extract_api_tokens(
 fn extract_api_url(
     headers: &axum::http::HeaderMap,
 ) -> Result<String> {
-    let api_url = headers.get("X-DeepSeek-Host")
-        .map_or(deepseek::DEEPSEEK_API_URL,
-                |h| h.to_str().map_err(|_| ApiError::MissingHeader {
-                    header: "X-Anthropic-Host".to_string()
-                })?,
-        );
-
-    let api_url = Uri::try_from(api_url).map_err(|_| ApiError::BadRequest {
-        message: "Invalid DeepSeek API host".to_string()
-    })?.to_string();
-
-    Ok(api_url)
+    match headers.get("X-DeepSeek-API-Url") {
+        None => {
+            Ok(deepseek::DEEPSEEK_API_URL.to_string())
+        }
+        Some(v) => {
+            let result = v.to_str().map_err(|_| ApiError::BadRequest {
+                message: "Invalid DeepSeek API Url".to_string()
+            })?;
+            Ok(Uri::try_from(result).map_err(|_| ApiError::BadRequest {
+                message: "Invalid DeepSeek API Url".to_string()
+            })?.to_string())
+        }
+    }
 }
 /// Calculates the cost of DeepSeek API usage.
 ///
@@ -228,7 +229,7 @@ pub(crate) async fn chat(
     let deepseek_api_url = extract_api_url(&headers)?;
 
     // Initialize clients
-    let deepseek_client = DeepSeekClient::new(deepseek_token,deepseek_api_url);
+    let deepseek_client = DeepSeekClient::new(deepseek_token, deepseek_api_url);
     let anthropic_client = AnthropicClient::new(anthropic_token);
 
     // Get messages with system prompt
@@ -274,15 +275,15 @@ pub(crate) async fn chat(
     let anthropic_headers = HashMap::new(); // Headers not available when using high-level chat method
 
     // Calculate usage costs
-    let deepseek_cost = calculate_deepseek_cost(
-        deepseek_response.usage.prompt_tokens,
-        deepseek_response.usage.completion_tokens,
-        deepseek_response.usage.completion_tokens_details.reasoning_tokens,
-        deepseek_response.usage.prompt_tokens_details.cached_tokens,
-        &state.config,
-    );
+    // let deepseek_cost = calculate_deepseek_cost(
+    //     deepseek_response.usage.prompt_tokens,
+    //     deepseek_response.usage.completion_tokens,
+    //     deepseek_response.usage.completion_tokens_details.reasoning_tokens,
+    //     deepseek_response.usage.prompt_tokens_details.cached_tokens,
+    //     &state.config,
+    // );
 
-    let anthropic_cost = calculate_anthropic_cost(
+    let _anthropic_cost = calculate_anthropic_cost(
         &anthropic_response.model,
         anthropic_response.usage.input_tokens,
         anthropic_response.usage.output_tokens,
@@ -315,25 +316,25 @@ pub(crate) async fn chat(
             headers: anthropic_headers,
             body: serde_json::to_value(&anthropic_response).unwrap_or_default(),
         }),
-        combined_usage: CombinedUsage {
-            total_cost: format_cost(deepseek_cost + anthropic_cost),
-            deepseek_usage: DeepSeekUsage {
-                input_tokens: deepseek_response.usage.prompt_tokens,
-                output_tokens: deepseek_response.usage.completion_tokens,
-                reasoning_tokens: deepseek_response.usage.completion_tokens_details.reasoning_tokens,
-                cached_input_tokens: deepseek_response.usage.prompt_tokens_details.cached_tokens,
-                total_tokens: deepseek_response.usage.total_tokens,
-                total_cost: format_cost(deepseek_cost),
-            },
-            anthropic_usage: AnthropicUsage {
-                input_tokens: anthropic_response.usage.input_tokens,
-                output_tokens: anthropic_response.usage.output_tokens,
-                cached_write_tokens: anthropic_response.usage.cache_creation_input_tokens,
-                cached_read_tokens: anthropic_response.usage.cache_read_input_tokens,
-                total_tokens: anthropic_response.usage.input_tokens + anthropic_response.usage.output_tokens,
-                total_cost: format_cost(anthropic_cost),
-            },
-        },
+        // combined_usage: CombinedUsage {
+        //     total_cost: format_cost(deepseek_cost + anthropic_cost),
+        //     deepseek_usage: DeepSeekUsage {
+        //         input_tokens: deepseek_response.usage.prompt_tokens,
+        //         output_tokens: deepseek_response.usage.completion_tokens,
+        //         reasoning_tokens: deepseek_response.usage.completion_tokens_details.reasoning_tokens,
+        //         cached_input_tokens: deepseek_response.usage.prompt_tokens_details.cached_tokens,
+        //         total_tokens: deepseek_response.usage.total_tokens,
+        //         total_cost: format_cost(deepseek_cost),
+        //     },
+        //     anthropic_usage: AnthropicUsage {
+        //         input_tokens: anthropic_response.usage.input_tokens,
+        //         output_tokens: anthropic_response.usage.output_tokens,
+        //         cached_write_tokens: anthropic_response.usage.cache_creation_input_tokens,
+        //         cached_read_tokens: anthropic_response.usage.cache_read_input_tokens,
+        //         total_tokens: anthropic_response.usage.input_tokens + anthropic_response.usage.output_tokens,
+        //         total_cost: format_cost(anthropic_cost),
+        //     },
+        // },
     };
 
     Ok(Json(response))
@@ -365,9 +366,10 @@ pub(crate) async fn chat_stream(
 
     // Extract API tokens
     let (deepseek_token, anthropic_token) = extract_api_tokens(&headers)?;
+    let deepseek_api_url = extract_api_url(&headers)?;
 
     // Initialize clients
-    let deepseek_client = DeepSeekClient::new(deepseek_token, );
+    let deepseek_client = DeepSeekClient::new(deepseek_token, deepseek_api_url);
     let anthropic_client = AnthropicClient::new(anthropic_token);
 
     // Get messages with system prompt
@@ -539,16 +541,20 @@ pub(crate) async fn chat_stream(
                                 let cost = calculate_deepseek_cost(
                                     usage.prompt_tokens,
                                     usage.completion_tokens,
-                                    usage.completion_tokens_details.reasoning_tokens,
-                                    usage.prompt_tokens_details.cached_tokens,
+                                    // usage.completion_tokens_details.reasoning_tokens,
+                                    0,
+                                    // usage.prompt_tokens_details.cached_tokens,
+                                    0,
                                     &config,
                                 );
 
                                 (DeepSeekUsage {
                                     input_tokens: usage.prompt_tokens,
                                     output_tokens: usage.completion_tokens,
-                                    reasoning_tokens: usage.completion_tokens_details.reasoning_tokens,
-                                    cached_input_tokens: usage.prompt_tokens_details.cached_tokens,
+                                    // reasoning_tokens: usage.completion_tokens_details.reasoning_tokens,
+                                    // cached_input_tokens: usage.prompt_tokens_details.cached_tokens,
+                                    reasoning_tokens:0,
+                                    cached_input_tokens:  0,
                                     total_tokens: usage.total_tokens,
                                     total_cost: format_cost(cost),
                                 }, cost)

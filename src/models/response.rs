@@ -22,7 +22,7 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anthropic_response: Option<ExternalApiResponse>,
     
-    pub combined_usage: CombinedUsage,
+    // pub combined_usage: CombinedUsage,
 }
 
 /// A block of content in a response.
@@ -171,25 +171,25 @@ impl ApiResponse {
             content: vec![ContentBlock::text(content)],
             deepseek_response: None,
             anthropic_response: None,
-            combined_usage: CombinedUsage {
-                total_cost: "$0.00".to_string(),
-                deepseek_usage: DeepSeekUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_tokens: 0,
-                    cached_input_tokens: 0,
-                    total_tokens: 0,
-                    total_cost: "$0.00".to_string(),
-                },
-                anthropic_usage: AnthropicUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cached_write_tokens: 0,
-                    cached_read_tokens: 0,
-                    total_tokens: 0,
-                    total_cost: "$0.00".to_string(),
-                },
-            },
+            // combined_usage: CombinedUsage {
+            //     total_cost: "$0.00".to_string(),
+            //     deepseek_usage: DeepSeekUsage {
+            //         input_tokens: 0,
+            //         output_tokens: 0,
+            //         reasoning_tokens: 0,
+            //         cached_input_tokens: 0,
+            //         total_tokens: 0,
+            //         total_cost: "$0.00".to_string(),
+            //     },
+            //     anthropic_usage: AnthropicUsage {
+            //         input_tokens: 0,
+            //         output_tokens: 0,
+            //         cached_write_tokens: 0,
+            //         cached_read_tokens: 0,
+            //         total_tokens: 0,
+            //         total_cost: "$0.00".to_string(),
+            //     },
+            // },
         }
     }
 }
