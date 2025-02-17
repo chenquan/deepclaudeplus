@@ -75,21 +75,21 @@ fn extract_api_tokens(
 
     Ok((deepseek_token, anthropic_token))
 }
-fn extract_host(
+fn extract_api_url(
     headers: &axum::http::HeaderMap,
 ) -> Result<String> {
-    let host = headers.get("X-DeepSeek-Host")
+    let api_url = headers.get("X-DeepSeek-Host")
         .map_or(deepseek::DEEPSEEK_API_URL,
                 |h| h.to_str().map_err(|_| ApiError::MissingHeader {
                     header: "X-Anthropic-Host".to_string()
                 })?,
         );
 
-    let host = Uri::try_from(host).map_err(|_| ApiError::BadRequest {
+    let api_url = Uri::try_from(api_url).map_err(|_| ApiError::BadRequest {
         message: "Invalid DeepSeek API host".to_string()
     })?.to_string();
 
-    Ok(host)
+    Ok(api_url)
 }
 /// Calculates the cost of DeepSeek API usage.
 ///
@@ -225,10 +225,10 @@ pub(crate) async fn chat(
 
     // Extract API tokens
     let (deepseek_token, anthropic_token) = extract_api_tokens(&headers)?;
-    let deepseek_host = extract_host(&headers)?;
+    let deepseek_api_url = extract_api_url(&headers)?;
 
     // Initialize clients
-    let deepseek_client = DeepSeekClient::new(deepseek_token,deepseek_host);
+    let deepseek_client = DeepSeekClient::new(deepseek_token,deepseek_api_url);
     let anthropic_client = AnthropicClient::new(anthropic_token);
 
     // Get messages with system prompt
