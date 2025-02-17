@@ -84,6 +84,7 @@ const DEFAULT_MODEL: &str = "deepseek-reasoner";
 pub struct DeepSeekClient {
     pub(crate) client: Client,
     api_token: String,
+    deepseek_host: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -169,10 +170,11 @@ pub(crate) struct DeepSeekRequest {
 }
 
 impl DeepSeekClient {
-    pub fn new(api_token: String) -> Self {
+    pub fn new(api_token: String, deepseek_host: String) -> Self {
         Self {
             client: Client::new(),
             api_token,
+            deepseek_host,
         }
     }
 
@@ -197,24 +199,24 @@ impl DeepSeekClient {
             "Authorization",
             format!("Bearer {}", self.api_token)
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid API token: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid API token: {}", e)
                 })?,
         );
         headers.insert(
             "Content-Type",
             "application/json"
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid content type: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid content type: {}", e)
                 })?,
         );
         headers.insert(
             "Accept",
             "application/json"
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid accept header: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid accept header: {}", e)
                 })?,
         );
 
@@ -256,7 +258,7 @@ impl DeepSeekClient {
                 // Remove protected fields from config body
                 body.remove("stream");
                 body.remove("messages");
-                
+
                 // Merge remaining fields from config.body
                 for (key, value) in body {
                     map.insert(key, value);
@@ -300,16 +302,16 @@ impl DeepSeekClient {
 
         let response = self
             .client
-            .post(DEEPSEEK_API_URL)
+            .post(&self.deepseek_host)
             .headers(headers)
             .json(&request)
             .send()
             .await
-            .map_err(|e| ApiError::DeepSeekError { 
+            .map_err(|e| ApiError::DeepSeekError {
                 message: format!("Request failed: {}", e),
                 type_: "request_failed".to_string(),
                 param: None,
-                code: None
+                code: None,
             })?;
 
         if !response.status().is_success() {
@@ -317,22 +319,22 @@ impl DeepSeekClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::DeepSeekError { 
+            return Err(ApiError::DeepSeekError {
                 message: error,
                 type_: "api_error".to_string(),
                 param: None,
-                code: None
+                code: None,
             });
         }
 
         response
             .json::<DeepSeekResponse>()
             .await
-            .map_err(|e| ApiError::DeepSeekError { 
+            .map_err(|e| ApiError::DeepSeekError {
                 message: format!("Failed to parse response: {}", e),
                 type_: "parse_error".to_string(),
                 param: None,
-                code: None
+                code: None,
             })
     }
 
@@ -359,7 +361,7 @@ impl DeepSeekClient {
         &self,
         messages: Vec<Message>,
         config: &ApiConfig,
-    ) -> Pin<Box<dyn Stream<Item = Result<StreamResponse>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item=Result<StreamResponse>> + Send>> {
         let headers = match self.build_headers(Some(&config.headers)) {
             Ok(h) => h,
             Err(e) => return Box::pin(futures::stream::once(async move { Err(e) })),
@@ -370,7 +372,7 @@ impl DeepSeekClient {
 
         Box::pin(async_stream::try_stream! {
             let mut stream = client
-                .post(DEEPSEEK_API_URL)
+                .post(&self.deepseek_host)
                 .headers(headers)
                 .json(&request)
                 .send()

@@ -15,6 +15,7 @@ mod config;
 mod error;
 mod handlers;
 mod models;
+mod model;
 
 use crate::{config::Config, handlers::AppState};
 use axum::routing::{post, Router};

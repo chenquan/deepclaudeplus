@@ -22,7 +22,9 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use std::{sync::Arc, collections::HashMap};
+use axum::http::{HeaderValue, Uri};
 use tokio_stream::wrappers::ReceiverStream;
+use crate::clients::deepseek;
 
 /// Application state shared across request handlers.
 ///
@@ -51,29 +53,44 @@ fn extract_api_tokens(
 ) -> Result<(String, String)> {
     let deepseek_token = headers
         .get("X-DeepSeek-API-Token")
-        .ok_or_else(|| ApiError::MissingHeader { 
-            header: "X-DeepSeek-API-Token".to_string() 
+        .ok_or_else(|| ApiError::MissingHeader {
+            header: "X-DeepSeek-API-Token".to_string()
         })?
         .to_str()
-        .map_err(|_| ApiError::BadRequest { 
-            message: "Invalid DeepSeek API token".to_string() 
+        .map_err(|_| ApiError::BadRequest {
+            message: "Invalid DeepSeek API token".to_string()
         })?
         .to_string();
 
     let anthropic_token = headers
         .get("X-Anthropic-API-Token")
-        .ok_or_else(|| ApiError::MissingHeader { 
-            header: "X-Anthropic-API-Token".to_string() 
+        .ok_or_else(|| ApiError::MissingHeader {
+            header: "X-Anthropic-API-Token".to_string()
         })?
         .to_str()
-        .map_err(|_| ApiError::BadRequest { 
-            message: "Invalid Anthropic API token".to_string() 
+        .map_err(|_| ApiError::BadRequest {
+            message: "Invalid Anthropic API token".to_string()
         })?
         .to_string();
 
     Ok((deepseek_token, anthropic_token))
 }
+fn extract_host(
+    headers: &axum::http::HeaderMap,
+) -> Result<String> {
+    let host = headers.get("X-DeepSeek-Host")
+        .map_or(deepseek::DEEPSEEK_API_URL,
+                |h| h.to_str().map_err(|_| ApiError::MissingHeader {
+                    header: "X-Anthropic-Host".to_string()
+                })?,
+        );
 
+    let host = Uri::try_from(host).map_err(|_| ApiError::BadRequest {
+        message: "Invalid DeepSeek API host".to_string()
+    })?.to_string();
+
+    Ok(host)
+}
 /// Calculates the cost of DeepSeek API usage.
 ///
 /// # Arguments
@@ -97,7 +114,7 @@ fn calculate_deepseek_cost(
     let cache_hit_cost = (cached_tokens as f64 / 1_000_000.0) * config.pricing.deepseek.input_cache_hit_price;
     let cache_miss_cost = ((input_tokens - cached_tokens) as f64 / 1_000_000.0) * config.pricing.deepseek.input_cache_miss_price;
     let output_cost = (output_tokens as f64 / 1_000_000.0) * config.pricing.deepseek.output_price;
-    
+
     cache_hit_cost + cache_miss_cost + output_cost
 }
 
@@ -208,9 +225,10 @@ pub(crate) async fn chat(
 
     // Extract API tokens
     let (deepseek_token, anthropic_token) = extract_api_tokens(&headers)?;
+    let deepseek_host = extract_host(&headers)?;
 
     // Initialize clients
-    let deepseek_client = DeepSeekClient::new(deepseek_token);
+    let deepseek_client = DeepSeekClient::new(deepseek_token,deepseek_host);
     let anthropic_client = AnthropicClient::new(anthropic_token);
 
     // Get messages with system prompt
@@ -218,7 +236,7 @@ pub(crate) async fn chat(
 
     // Call DeepSeek API
     let deepseek_response = deepseek_client.chat(messages.clone(), &request.deepseek_config).await?;
-    
+
     // Store response metadata
     let deepseek_status: u16 = 200;
     let deepseek_headers = HashMap::new(); // Headers not available when using high-level chat method
@@ -228,11 +246,11 @@ pub(crate) async fn chat(
         .choices
         .first()
         .and_then(|c| c.message.reasoning_content.as_ref())
-        .ok_or_else(|| ApiError::DeepSeekError { 
+        .ok_or_else(|| ApiError::DeepSeekError {
             message: "No reasoning content in response".to_string(),
             type_: "missing_content".to_string(),
             param: None,
-            code: None
+            code: None,
         })?;
 
     let thinking_content = format!("<thinking>\n{}\n</thinking>", reasoning_content);
@@ -248,9 +266,9 @@ pub(crate) async fn chat(
     let anthropic_response = anthropic_client.chat(
         anthropic_messages,
         request.get_system_prompt().map(String::from),
-        &request.anthropic_config
+        &request.anthropic_config,
     ).await?;
-    
+
     // Store response metadata
     let anthropic_status: u16 = 200;
     let anthropic_headers = HashMap::new(); // Headers not available when using high-level chat method
@@ -275,10 +293,10 @@ pub(crate) async fn chat(
 
     // Combine thinking content with Anthropic's response
     let mut content = Vec::new();
-    
+
     // Add thinking block first
     content.push(ContentBlock::text(thinking_content));
-    
+
     // Add Anthropic's response blocks
     content.extend(anthropic_response.content.clone().into_iter()
         .map(ContentBlock::from_anthropic));
@@ -349,7 +367,7 @@ pub(crate) async fn chat_stream(
     let (deepseek_token, anthropic_token) = extract_api_tokens(&headers)?;
 
     // Initialize clients
-    let deepseek_client = DeepSeekClient::new(deepseek_token);
+    let deepseek_client = DeepSeekClient::new(deepseek_token, );
     let anthropic_client = AnthropicClient::new(anthropic_token);
 
     // Get messages with system prompt
@@ -371,7 +389,7 @@ pub(crate) async fn chat_stream(
                 serde_json::to_string(&StreamEvent::Start {
                     created: Utc::now(),
                 })
-                .unwrap_or_default(),
+                    .unwrap_or_default(),
             )))
             .await;
 
@@ -384,7 +402,7 @@ pub(crate) async fn chat_stream(
                         text: "<thinking>\n".to_string(),
                     }],
                 })
-                .unwrap_or_default(),
+                    .unwrap_or_default(),
             )))
             .await;
 
@@ -392,7 +410,7 @@ pub(crate) async fn chat_stream(
         let mut deepseek_usage = None;
         let mut complete_reasoning = String::new();
         let mut deepseek_stream = deepseek_client.chat_stream(messages.clone(), &request_clone.deepseek_config);
-        
+
         while let Some(chunk) = deepseek_stream.next().await {
             match chunk {
                 Ok(response) => {
@@ -414,16 +432,16 @@ pub(crate) async fn chat_stream(
                                                 text: reasoning.to_string(),
                                             }],
                                         })
-                                        .unwrap_or_default(),
+                                            .unwrap_or_default(),
                                     )))
                                     .await;
-                                
+
                                 // Accumulate complete reasoning for later use
                                 complete_reasoning.push_str(reasoning);
                             }
                         }
                     }
-                    
+
                     // Store usage information if present
                     if let Some(usage) = response.usage {
                         deepseek_usage = Some(usage);
@@ -436,7 +454,7 @@ pub(crate) async fn chat_stream(
                                 message: e.to_string(),
                                 code: 500,
                             })
-                            .unwrap_or_default(),
+                                .unwrap_or_default(),
                         )))
                         .await;
                     return;
@@ -453,7 +471,7 @@ pub(crate) async fn chat_stream(
                         text: "\n</thinking>".to_string(),
                     }],
                 })
-                .unwrap_or_default(),
+                    .unwrap_or_default(),
             )))
             .await;
 
@@ -479,12 +497,12 @@ pub(crate) async fn chat_stream(
                         if !message.content.is_empty() {
                             let _ = tx
                                 .send(Ok(Event::default().event("content").data(
-                                    serde_json::to_string(&StreamEvent::Content { 
+                                    serde_json::to_string(&StreamEvent::Content {
                                         content: message.content.into_iter()
                                             .map(ContentBlock::from_anthropic)
                                             .collect()
                                     })
-                                    .unwrap_or_default(),
+                                        .unwrap_or_default(),
                                 )))
                                 .await;
                         }
@@ -499,7 +517,7 @@ pub(crate) async fn chat_stream(
                                         text: delta.text,
                                     }],
                                 })
-                                .unwrap_or_default(),
+                                    .unwrap_or_default(),
                             )))
                             .await;
                     }
@@ -525,7 +543,7 @@ pub(crate) async fn chat_stream(
                                     usage.prompt_tokens_details.cached_tokens,
                                     &config,
                                 );
-                                
+
                                 (DeepSeekUsage {
                                     input_tokens: usage.prompt_tokens,
                                     output_tokens: usage.completion_tokens,
@@ -561,7 +579,7 @@ pub(crate) async fn chat_stream(
                                             },
                                         },
                                     })
-                                    .unwrap_or_default(),
+                                        .unwrap_or_default(),
                                 )))
                                 .await;
                         }
@@ -575,7 +593,7 @@ pub(crate) async fn chat_stream(
                                 message: e.to_string(),
                                 code: 500,
                             })
-                            .unwrap_or_default(),
+                                .unwrap_or_default(),
                         )))
                         .await;
                     return;
