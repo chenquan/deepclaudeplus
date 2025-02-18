@@ -64,6 +64,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin};
 use futures::StreamExt;
 use serde_json;
+use tracing::debug;
 
 pub(crate) const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/chat/completions";
 const DEFAULT_MODEL: &str = "deepseek-reasoner";
@@ -84,17 +85,19 @@ const DEFAULT_MODEL: &str = "deepseek-reasoner";
 pub struct DeepSeekClient {
     pub(crate) client: Client,
     api_token: String,
+    api_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+
 pub struct DeepSeekResponse {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub model: String,
     pub choices: Vec<Choice>,
-    pub usage: Usage,
-    pub system_fingerprint: String,
+    // pub usage: Usage,
+    // pub system_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -136,7 +139,6 @@ pub struct StreamResponse {
     pub model: String,
     pub choices: Vec<StreamChoice>,
     pub usage: Option<Usage>,
-    pub system_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -144,10 +146,7 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
-    pub prompt_tokens_details: PromptTokensDetails,
-    pub completion_tokens_details: CompletionTokensDetails,
-    pub prompt_cache_hit_tokens: u32,
-    pub prompt_cache_miss_tokens: u32,
+
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -169,10 +168,11 @@ pub(crate) struct DeepSeekRequest {
 }
 
 impl DeepSeekClient {
-    pub fn new(api_token: String) -> Self {
+    pub fn new(api_token: String, api_url: String) -> Self {
         Self {
             client: Client::new(),
             api_token,
+            api_url,
         }
     }
 
@@ -197,24 +197,24 @@ impl DeepSeekClient {
             "Authorization",
             format!("Bearer {}", self.api_token)
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid API token: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid API token: {}", e)
                 })?,
         );
         headers.insert(
             "Content-Type",
             "application/json"
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid content type: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid content type: {}", e)
                 })?,
         );
         headers.insert(
             "Accept",
             "application/json"
                 .parse()
-                .map_err(|e| ApiError::Internal { 
-                    message: format!("Invalid accept header: {}", e) 
+                .map_err(|e| ApiError::Internal {
+                    message: format!("Invalid accept header: {}", e)
                 })?,
         );
 
@@ -256,7 +256,7 @@ impl DeepSeekClient {
                 // Remove protected fields from config body
                 body.remove("stream");
                 body.remove("messages");
-                
+
                 // Merge remaining fields from config.body
                 for (key, value) in body {
                     map.insert(key, value);
@@ -300,16 +300,16 @@ impl DeepSeekClient {
 
         let response = self
             .client
-            .post(DEEPSEEK_API_URL)
+            .post(&self.api_url)
             .headers(headers)
             .json(&request)
             .send()
             .await
-            .map_err(|e| ApiError::DeepSeekError { 
+            .map_err(|e| ApiError::DeepSeekError {
                 message: format!("Request failed: {}", e),
                 type_: "request_failed".to_string(),
                 param: None,
-                code: None
+                code: None,
             })?;
 
         if !response.status().is_success() {
@@ -317,22 +317,22 @@ impl DeepSeekClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::DeepSeekError { 
+            return Err(ApiError::DeepSeekError {
                 message: error,
                 type_: "api_error".to_string(),
                 param: None,
-                code: None
+                code: None,
             });
         }
 
         response
             .json::<DeepSeekResponse>()
             .await
-            .map_err(|e| ApiError::DeepSeekError { 
+            .map_err(|e| ApiError::DeepSeekError {
                 message: format!("Failed to parse response: {}", e),
                 type_: "parse_error".to_string(),
                 param: None,
-                code: None
+                code: None,
             })
     }
 
@@ -359,18 +359,19 @@ impl DeepSeekClient {
         &self,
         messages: Vec<Message>,
         config: &ApiConfig,
-    ) -> Pin<Box<dyn Stream<Item = Result<StreamResponse>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item=Result<StreamResponse>> + Send + '_>> {
         let headers = match self.build_headers(Some(&config.headers)) {
             Ok(h) => h,
             Err(e) => return Box::pin(futures::stream::once(async move { Err(e) })),
         };
 
+        debug!("开始请求");
         let request = self.build_request(messages, true, config);
         let client = self.client.clone();
 
         Box::pin(async_stream::try_stream! {
             let mut stream = client
-                .post(DEEPSEEK_API_URL)
+                .post(&self.api_url)
                 .headers(headers)
                 .json(&request)
                 .send()
@@ -402,9 +403,16 @@ impl DeepSeekClient {
                     
                     if line.starts_with("data: ") {
                         let json_data = &line["data: ".len()..];
-                        if let Ok(response) = serde_json::from_str::<StreamResponse>(json_data) {
-                            yield response;
+                        debug!("response: {:?}",json_data);
+                        match serde_json::from_str::<StreamResponse>(json_data){
+                        Ok(response) => {
+                                yield response;
+                            },
+                            Err(e) => {
+                                debug!("{}",e);
+                            }
                         }
+
                     }
                 }
 
